@@ -23,6 +23,7 @@ import type {
 import { useRef } from "react";
 import {
   useEffect,
+  useEffectEvent,
   useState,
   forwardRef,
   useImperativeHandle,
@@ -123,47 +124,40 @@ function Game({
   onComplete,
   onGoHome,
 }: Props) {
-  const [endResult, setEndResult] = useState<GameResult | null>(null);
+  const [hasAttemptsOnEntry] = useState(attemptsLeft > 0);
+  const [endResult, setEndResult] = useState<GameResult | null>(() => attemptsLeft <= 0
+    ? { distance: bestDistanceKm, character, reason: "crash" }
+    : null);
   const [discountView, setDiscountView] = useState(false);
   const [runKey, setRunKey] = useState(0);
   const [startError, setStartError] = useState<string | null>(null);
-  const [isGameReady, setIsGameReady] = useState(false);
+  const [readyRun, setReadyRun] = useState<{
+    character: CharacterId;
+    sessionId: string;
+    runKey: number;
+  } | null>(null);
+  const isGameReady = !hasAttemptsOnEntry || (readyRun?.character === character
+    && readyRun.sessionId === sessionId && readyRun.runKey === runKey);
   const [finishRequestFailed, setFinishRequestFailed] = useState(false);
   const [isClaiming, setIsClaiming] = useState(false);
   const [promoCopied, setPromoCopied] = useState(false);
-  const [sessionStats, setSessionStats] = useState({
+  const sessionStats = {
     attemptsUsed,
     attemptsLeft,
     bestDistanceKm,
     bestDiscount,
     promoCode,
-  });
+  };
   const milestoneLayerRef = useRef<MilestoneLayerHandle | null>(null);
   const [pendingVictory, setPendingVictory] = useState<GameResult | null>(null);
 
-  useEffect(() => {
-    setSessionStats({
-      attemptsUsed,
-      attemptsLeft,
-      bestDistanceKm,
-      bestDiscount,
-      promoCode,
-    });
-  }, [attemptsUsed, attemptsLeft, bestDistanceKm, bestDiscount, promoCode]);
-
-  const showMilestoneRef = useRef<(km: number) => void>(() => {});
-  showMilestoneRef.current = (km: number) => {
-    milestoneLayerRef.current?.show(km);
-  };
-
-  const onCompleteRef = useRef(onComplete);
-  onCompleteRef.current = onComplete;
+  const completeVictory = useEffectEvent(onComplete);
 
   useEffect(() => {
     if (!pendingVictory) return;
 
     const id = window.setTimeout(() => {
-      onCompleteRef.current(pendingVictory);
+      completeVictory(pendingVictory);
     }, VICTORY_TRANSITION_MS);
 
     return () => clearTimeout(id);
@@ -183,22 +177,10 @@ function Game({
     setStartError(null);
     setEndResult(null);
     setFinishRequestFailed(false);
-    setIsGameReady(false);
     setDistanceHud(0);
     progressRefMobile.current?.setValue(0);
     progressRefDesktop.current?.setValue(0);
     setRunKey((k) => k + 1);
-  };
-
-  const applySessionUpdate = (updated: PlayerSessionState) => {
-    setSessionStats({
-      attemptsUsed: updated.attemptsUsed,
-      attemptsLeft: updated.attemptsLeft,
-      bestDistanceKm: updated.bestDistanceKm,
-      bestDiscount: updated.bestDiscount,
-      promoCode: updated.promoCode,
-    });
-    onSessionUpdate(updated);
   };
 
   const handleClaimDiscount = async () => {
@@ -208,7 +190,7 @@ function Game({
         sessionId,
         action: "claim_discount",
       });
-      applySessionUpdate(updated);
+      onSessionUpdate(updated);
       setDiscountView(true);
     } catch (error) {
       setStartError(
@@ -266,19 +248,7 @@ function Game({
     let rafId = 0;
     let cleanup = () => {};
 
-    setIsGameReady(false);
-
-    if (attemptsLeft <= 0) {
-      setStartError(null);
-      setFinishRequestFailed(false);
-      setEndResult({
-        distance: bestDistanceKm,
-        character,
-        reason: "crash",
-      });
-      setIsGameReady(true);
-      return;
-    }
+    if (!hasAttemptsOnEntry) return;
 
     const finishRunForAttempt = (result: GameResult) => {
       const runIdAtFinish = runId;
@@ -303,7 +273,7 @@ function Game({
             }),
           ]);
 
-          applySessionUpdate(updated);
+          onSessionUpdate(updated);
           setFinishRequestFailed(false);
 
           if (
@@ -339,23 +309,23 @@ function Game({
     };
 
     async function startRun() {
-      setStartError(null);
-      setFinishRequestFailed(false);
-
       try {
         await pendingFinishRef.current.catch(() => {});
+        if (cancelled) return;
+        setStartError(null);
+        setFinishRequestFailed(false);
         const updated = await updateGame({
           sessionId,
           action: "start_attempt",
         });
         if (cancelled) return;
-        applySessionUpdate(updated);
+        onSessionUpdate(updated);
       } catch (error) {
         if (cancelled) return;
         setStartError(
           error instanceof Error ? error.message : "Не удалось начать заезд",
         );
-        setIsGameReady(true);
+        setReadyRun({ character, sessionId, runKey });
         if (lastCrashResultRef.current) {
           setEndResult(lastCrashResultRef.current);
         }
@@ -415,16 +385,13 @@ function Game({
       let status: GameState["status"] = "playing";
       let playerY = player.groundY;
       let playerVY = 0;
-      let jumpUntil = 0;
       let jumpBufferedUntil = 0;
       let distance = 0;
-      const JUMP_SPRITE_MS = 800;
 
       const passedMilestones = new Set<number>();
 
       const executeJump = () => {
         playerVY = player.jumpVY;
-        jumpUntil = performance.now() + JUMP_SPRITE_MS;
         jumpBufferedUntil = 0;
       };
 
@@ -525,7 +492,7 @@ function Game({
           for (const tier of DISCOUNT_TIERS) {
             if (currentKm >= tier && !passedMilestones.has(tier)) {
               passedMilestones.add(tier);
-              showMilestoneRef.current(tier);
+              milestoneLayerRef.current?.show(tier);
             }
           }
 
@@ -655,7 +622,7 @@ function Game({
         assets.road = roadCanvas;
 
         if (!cancelled && runId === activeRunIdRef.current) {
-          setIsGameReady(true);
+          setReadyRun({ character, sessionId, runKey });
         }
         startGameLoop();
       };
@@ -673,12 +640,13 @@ function Game({
     startRun();
 
     return () => {
+      cancelled = true;
       cleanup();
       if (promoRedirectTimeoutRef.current != null) {
         window.clearTimeout(promoRedirectTimeoutRef.current);
       }
     };
-  }, [character, runKey, sessionId]);
+  }, [character, runKey, sessionId, onSessionUpdate, hasAttemptsOnEntry]);
 
   let characterIcon = "/kodik-icon.svg";
   if (character === "vekta") {
@@ -700,7 +668,6 @@ function Game({
   const isExhaustedWithoutDiscount =
     sessionStats.attemptsLeft <= 0 &&
     sessionStats.bestDistanceKm < DISCOUNT_TIERS[0];
-  const availableDiscount = endResult ? getDiscount(endResult.distance) : 0;
 
   return (
     <div className="fixed inset-0 flex h-dvh w-full flex-col items-center justify-center overflow-hidden bg-black">
@@ -727,7 +694,7 @@ function Game({
                 <div className="h-[32px] w-[32px] bg-black/30 backdrop-blur-md rounded-lg">
                   <NextImage
                     src={characterIcon}
-                    alt=""
+                    alt={character === "vekta" ? "Векта" : "Кодик"}
                     width={32}
                     height={32}
                     sizes="32px"
@@ -757,7 +724,7 @@ function Game({
                   className="pointer-events-none absolute top-4 left-70 z-[2]"
                 ></img>
                 <div className="flex items-center justify-center h-[32px] w-[32px] bg-black/30 backdrop-blur-md rounded-lg">
-                  <img src="./volume.svg" className="h-[16px] w-[16px]"></img>
+                  <img src="./volume.svg" alt="" className="h-[16px] w-[16px]"></img>
                 </div>
               </div>
               <div

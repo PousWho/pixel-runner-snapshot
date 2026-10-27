@@ -84,7 +84,7 @@ function Form({ onSuccess }: Props) {
 
   const getError = (field: LeadFormField) => {
     if (!submitted && !touched[field]) return undefined;
-    return validateLeadField(field, values);
+    return errors[field] ?? validateLeadField(field, values);
   };
 
   const markTouched = (field: LeadFormField) => {

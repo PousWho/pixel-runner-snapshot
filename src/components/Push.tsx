@@ -1,11 +1,6 @@
 "use client";
 
-import { Handjet, Press_Start_2P } from "next/font/google";
-
-const pressStart2P = Press_Start_2P({
-  weight: "400",
-  subsets: ["latin"],
-});
+import { Handjet } from "next/font/google";
 
 const handjet = Handjet({
   subsets: ["latin", "cyrillic"],

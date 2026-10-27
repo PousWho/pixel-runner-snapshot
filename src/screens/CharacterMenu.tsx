@@ -4,7 +4,6 @@ import React from "react";
 // import { CHARACTERS } from "@/lib/characters";
 import CharacterSelector from "@/components/CharacterSelector";
 import CharacterSelectorMain from "@/components/CharacterSelectorMain";
-import { useState } from "react";
 import { CharacterId } from "@/lib/characters";
 import Button from "@/components/Button";
 import AccentText from "@/components/AccentText";

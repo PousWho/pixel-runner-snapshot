@@ -17,7 +17,7 @@ function CharacterSelectorMain({  value, onChange  }: Props) {
 
     return (
         <div role="radiogroup" className="flex h-full min-h-0 w-full items-center justify-center gap-[24px]">
-            <button role="radio" onClick={() => onChange(CHARACTERS[0].id)} className="flex h-full min-h-0 flex-col cursor-pointer items-center justify-center gap-3 rounded-3xl transition hover:shadow-[0_0_16px_red]" >
+            <button role="radio" aria-checked={selectedVecta} aria-label={CHARACTERS[0].name} onClick={() => onChange(CHARACTERS[0].id)} className="flex h-full min-h-0 flex-col cursor-pointer items-center justify-center gap-3 rounded-3xl transition hover:shadow-[0_0_16px_red]" >
                 <div className="flex h-full min-h-0 items-center justify-center">
                     <img
                         src="/vecta-card.png"
@@ -29,7 +29,7 @@ function CharacterSelectorMain({  value, onChange  }: Props) {
                     />
                 </div>
             </button>
-            <button role="radio" onClick={() => onChange(CHARACTERS[1].id)} className="flex h-full min-h-0 flex-col cursor-pointer items-center justify-center gap-3 rounded-3xl transition hover:shadow-[0_0_16px_#77FF00]">
+            <button role="radio" aria-checked={selectedKodik} aria-label={CHARACTERS[1].name} onClick={() => onChange(CHARACTERS[1].id)} className="flex h-full min-h-0 flex-col cursor-pointer items-center justify-center gap-3 rounded-3xl transition hover:shadow-[0_0_16px_#77FF00]">
                 <div className="flex h-full min-h-0 items-center justify-center">
                     <img
                         src="/kodik-card.png"

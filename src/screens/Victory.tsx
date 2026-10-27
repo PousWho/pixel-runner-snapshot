@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import Promo from "@/components/Promo";
 import { Press_Start_2P } from "next/font/google";
 import Button from "@/components/Button";
@@ -26,16 +26,10 @@ function Victory({
   bestDiscount,
   onSessionUpdate,
 }: Props) {
-  const [displayCode, setDisplayCode] = useState<string | null>(promoCode);
+  const displayCode = promoCode;
   const [isClaiming, setIsClaiming] = useState(false);
   const [promoCopied, setPromoCopied] = useState(false);
   const [claimError, setClaimError] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (promoCode) {
-      setDisplayCode(promoCode);
-    }
-  }, [promoCode]);
 
   const handleClaim = async () => {
     setIsClaiming(true);
@@ -51,7 +45,6 @@ function Victory({
           action: "claim_discount",
         });
         code = updated.promoCode;
-        setDisplayCode(code);
         onSessionUpdate(updated);
       }
 
