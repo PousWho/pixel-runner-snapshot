@@ -1,0 +1,91 @@
+РЕВЬЮ PIXEL-RUNNER — СВОДКА ФАКТОВ
+======================================================================
+Полный список замечаний (фронт + бэк + проект). Формат:
+[СРОЧНОСТЬ] файл:строка — факт.
+Верифицировано по коду. 63 подтверждённых замечания, без учёта придирок.
+
+
+КРИТИЧНО
+----------------------------------------------------------------------
+[CRIT] src/lib/players-store.ts:228 — distanceKm приходит с клиента, сервер её не проверяет; POST finish_attempt с distanceKm:5000 даёт максимальную скидку без игры.
+[CRIT] src/lib/players-store.ts:222 — finish_attempt не требует и не списывает попытку; можно звать при attemptsLeft=0 без start_attempt → MAX_ATTEMPTS не защищает результат.
+[CRIT] src/lib/players-store.ts:201 — startAttempt: read-modify-write без атомарности; параллельные запросы двойным расходом обходят лимит попыток, счётчик уходит в минус.
+
+
+ВЫСОКИЙ
+----------------------------------------------------------------------
+[HIGH] src/app/api/lead/route.ts:23 — нет rate limiting ни на одном роуте (спам лидов, фарм промокодов, перебор).
+[HIGH] src/lib/players-store.ts:94 — sessionId единственный «пароль», не привязан к клиенту, возвращается в теле ответа; таблица без RLS под service-role ключом.
+[HIGH] src/lib/players-store.ts:130 — TOCTOU в getOrCreatePlayer: два первых сабмита одного телефона → второй upsert затирает session_id первого → его запросы 404.
+[HIGH] src/lib/players-store.ts:80 — savePlayer пишет всю строку из устаревшего снапшота → потерянные апдейты между параллельными мутациями.
+[HIGH] src/app/page.tsx:38 — нет персистентности сессии: reload/back стирает sessionId и прогресс, кидает на стартовый экран.
+[HIGH] src/game/update.ts:49 — updateObstacles каждый кадр пересоздаёт весь массив препятствий и объекты hitbox (GC-давление на 60 fps).
+[HIGH] next.config.ts:3 — тяжёлые PNG раздаются сырыми через <img>, next/image и оптимизация картинок не настроены.
+[HIGH] src/screens/Game.tsx:264 — модалка краша показывается оптимистично до ответа сервера; при упавшем запросе попытки не откатываются.
+[HIGH] src/components/Modal.tsx:99 — модалка без role="dialog"/aria-modal/focus-trap/начального фокуса.
+
+
+СРЕДНИЙ
+----------------------------------------------------------------------
+[MED] src/lib/players-store.ts:105 — промокоды на Math.random(), 4 символа, без UNIQUE в схеме: коллизии не детектятся, код предсказуем.
+[MED] src/lib/players-store.ts:87 — console.error дампит полные объекты ошибок Supabase (телефон/имя) в логи; риск по 152-ФЗ.
+[MED] src/lib/players-store.ts:110 — согласие валидируется, но не сохраняется (нет consent-колонок); honeypot обходится отсутствием поля.
+[MED] supabase/schema.sql:3 — phone (ПДн) как PRIMARY KEY: немутабелен, усложняет исправление и удаление по закону.
+[MED] supabase/schema.sql:8 — схема без CHECK-констрейнтов (attempts_left в минус, status/character свободный текст, нет UNIQUE на промокод).
+[MED] src/lib/players-store.ts:251 — claimDiscount при параллельных вызовах генерит два разных промокода; в базе один, клиенту другой.
+[MED] src/game/state.ts:20 — весь модуль state.ts мёртвый (createInitialState/buildObstacles не импортируются); тянет мёртвые константы config.ts.
+[MED] src/lib/screens.ts:1 — экран completion заведён в тип и как компонент, но никогда не рендерится.
+[MED] src/lib/players-store.ts:232 — порог победы 5000 захардкожен в сторе вместо DISTANCE_GOAL.
+[MED] src/app/api/game-update/route.ts:81 — формирование ответа продублировано в lead-роуте, game-update-роуте и типе api-client.
+[MED] package.json:5 — ноль тестов, нет тестового тулинга, нет CI.
+[MED] src/screens/Game.tsx:997 — canvas-игра недоступна для скринридеров (нет label, HUD не озвучивается).
+[MED] src/app/layout.tsx:17 — нет viewport meta/export; масштабирование на мобилке не определено.
+[MED] src/screens/Form.tsx:43 — updateField валидирует по устаревшему снапшоту values, а не по prev.
+[MED] src/components/CopyButton.tsx:59 — navigator.clipboard без фолбэка на небезопасный контекст/отказ в разрешении.
+[MED] src/game/update.ts:63 — getDifficulty(distance) вызывается, результат выбрасывается (мёртвый путь роста сложности).
+[MED] src/screens/Form.tsx:266 — ссылка на политику конфиденциальности без href (не кликабельна, не фокусируется).
+[MED] src/game/update.ts:10 — сид рана генерится, но не передаётся на сервер (сервер не может ре-симулировать заезд; связано с CRIT #1).
+
+
+НИЗКИЙ
+----------------------------------------------------------------------
+[LOW] src/lib/form-validation.ts:20 — нормализация коерсит фейковый/короткий ввод в валидный 11-значный ключ (isValidPhone проверяет только длину).
+[LOW] src/app/api/lead/route.ts:36 — /api/lead делает getPlayerByPhone дважды + запись (лишние round-trips на горячем эндпоинте).
+[LOW] supabase/schema.sql:16 — updated_at поддерживается только в JS, без BEFORE UPDATE триггера; ненадёжен как токен блокировки.
+[LOW] src/lib/players-store.ts:88 — DB-ошибки перевыбрасываются как сырой Error, не PlayerStoreError (теряется типизация, конфликты не отличить от 500).
+[LOW] src/lib/player.ts:30 — неиспользуемый экспортируемый тип PlayersDatabase.
+[LOW] src/game/generator.ts:99 — неиспользуемая функция spawnChunk.
+[LOW] src/lib/api-client.ts:14 — isReturning протянут через состояние клиента, но ни на что не влияет.
+[LOW] src/app/layout.tsx:23 — нет error boundary и route-level error/loading UI в App Router.
+[LOW] .cursor/debug-39fedb.log:1 — закоммичен дев-артефакт; .cursor/ не в .gitignore.
+[LOW] README.md:7 — README устарел: пишет «бэкенд не реализован»/«пустая белая страница», ссылается на несуществующий .env.example.
+[LOW] supabase/schema.sql:9 — MAX_ATTEMPTS продублирован между доменом (player.ts) и SQL (default 3).
+[LOW] src/screens/Game.tsx:82 — MilestoneLayer передаёт дистанцию (км) как сумму скидки (рубли).
+[LOW] src/game/generator.ts:35 — pickTemplate может вернуть undefined через eligible[...-1]! при пустом eligible → падение generateChunk.
+[LOW] src/game/generator.ts:94 — при провале валидации чанк молча пустой → длинный пустой участок трассы вместо ретрая.
+[LOW] src/game/update.ts:95 — finish_car с хитбоксом 0×0 («никогда не сталкивается» через вырожденный хитбокс).
+[LOW] src/game/update.ts:86 — mobileFinishCarOffsetX = 70 — магическое число без пояснения.
+[LOW] src/game/collision.ts:16 — коллизия сканирует все препятствия каждый кадр без раннего выхода + аллокация замыкания.
+[LOW] src/screens/Game.tsx:243 — getDiscount пересчитывается каждый кадр внутри setDistanceHud.
+[LOW] src/game/draw.ts:77 — drawPlayer выбирает кадр цепочкой из 6 if/else, пересчитывая Math.floor(now/80)%6.
+[LOW] src/game/update.ts:75 — obstacles.concat внутри while-цикла спавна аллоцирует новый массив на каждый чанк.
+[LOW] src/game/chunk-templates.ts:67 — шаблон чанка с пустым id дублирует «konus затем hole».
+[LOW] src/game/config.ts:16 — config.ts дублирует layout-константы из mobile.ts; часть мёртвая.
+[LOW] src/screens/Victory.tsx:57 — handleClaim молча выходит, если clipboard-запись упала или кода нет.
+[LOW] src/app/page.tsx:15 — шрифты Press_Start_2P/Handjet/Onest объявляются в каждом компоненте заново.
+[LOW] src/screens/Game.tsx:680 — иконка громкости в HUD декоративна (не управляет звуком), иконка персонажа без alt.
+[LOW] src/screens/Start.tsx:18 — Start и CharacterMenu используют h-screen вместо h-dvh (обрезка под мобильным UI-хромом).
+
+
+ПРИДИРКИ
+----------------------------------------------------------------------
+[NIT] src/game/draw.ts:76 — 6-веточный if/else вместо индекса в runFrames.
+[NIT] src/game/collision.ts:1 — тип Area импортирован как значение; лишняя двойная ;.
+[NIT] src/components/Push.tsx:40 — дублирующиеся/конфликтующие Tailwind-классы позиционирования.
+
+
+ПРОВЕРЕНО, НЕ БАГ (не флагать)
+----------------------------------------------------------------------
+Эффект перезапуска игры с deps [character, runKey, sessionId] в src/screens/Game.tsx:619
+не зависит от sessionStats намеренно — свежие значения читаются через рефы
+(onCompleteRef, pendingFinishRef, activeRunIdRef). Это осознанный паттерн, а не баг.

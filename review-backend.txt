@@ -1,0 +1,156 @@
+РЕВЬЮ PIXEL-RUNNER — БЭКЕНД
+======================================================================
+Замечания по серверной части: API-роуты, слой данных, схема БД,
+безопасность, конкурентность, anti-cheat. По приоритету.
+
+
+----------------------------------------------------------------------
+КРИТИЧНО — БЕЗ ЭТОГО НЕЛЬЗЯ В ПРОД
+----------------------------------------------------------------------
+
+1) Дистанция приходит с клиента, сервер ей верит → бесплатная максимальная скидка
+   src/lib/players-store.ts:228, src/app/api/game-update/route.ts:64
+   (клиент: src/screens/Game.tsx:481, сид рана не передаётся: src/game/update.ts:10)
+
+   distanceKm считается в браузере и уходит на сервер как есть. Роут проверяет
+   только «число >= 0», finishAttempt делает getDiscount(km). Серверной проверки
+   времени/скорости/физики нет. Один запрос:
+       POST /api/game-update {"sessionId":"…","action":"finish_attempt","distanceKm":5000}
+   → bestDiscount = 5000, затем claim_discount печатает промокод. Anti-cheat из
+   ТЗ 4.2 фактически отсутствует.
+
+   Фикс: привязать попытку к серверному времени старта, ограничить
+   distanceKm <= (прошло_времени × макс_скорость) и <= DISTANCE_GOAL. Источник
+   правды по дистанции — сервер.
+
+
+2) finish_attempt не требует и не тратит попытку → MAX_ATTEMPTS бесполезен
+   src/lib/players-store.ts:222
+
+   Попытку списывает только startAttempt. finishAttempt вызывается напрямую сколько
+   угодно раз, даже при attemptsLeft = 0; start_attempt можно пропустить. Лимит 3
+   попытки результат не защищает.
+
+   Фикс: серверная стейт-машина — finish_attempt валиден только при статусе
+   started_game, закрывает попытку, отклоняется без активной попытки.
+
+
+3) Гонка read-modify-write в startAttempt → двойной расход попыток
+   src/lib/players-store.ts:201
+
+   SELECT → проверка attemptsLeft > 0 в JS → уменьшение в JS → запись всей строки.
+   Атомарности между чтением и записью нет. Два одновременных start_attempt
+   (два клика/вкладки/скрипт) оба читают attemptsLeft = 1, оба проходят проверку,
+   оба пишут. Счётчик может уйти в минус.
+
+   Фикс (общий принцип для всего стора): инвариант проверять и менять одним
+   атомарным SQL:
+       UPDATE players
+       SET attempts_used = attempts_used + 1,
+           attempts_left = attempts_left - 1,
+           status = 'started_game'
+       WHERE session_id = $1 AND attempts_left > 0 AND status <> 'started_game'
+       RETURNING *;
+   0 строк → NO_ATTEMPTS_LEFT. Плюс CHECK (attempts_left >= 0) в схеме.
+
+
+----------------------------------------------------------------------
+ВЫСОКИЙ ПРИОРИТЕТ
+----------------------------------------------------------------------
+
+- Нет rate limiting ни на одном роуте (src/app/api/lead/route.ts:23,
+  src/app/api/game-update/route.ts). Нет middleware, нет троттлинга.
+  Спам лидов, фарм промокодов, перебор. Публичный эндпоинт пишет ПДн service-role
+  ключом. Фикс: лимит по IP и по телефону; cooldown на создание лида.
+
+- sessionId — единственный «пароль», не привязан к клиенту
+  (src/lib/players-store.ts:94) + таблица без RLS под service-role ключом
+  (src/lib/supabase-server.ts:9, supabase/schema.sql). sessionId возвращается в
+  теле ответа → попадает в историю/логи/прокси; кто его перехватил, управляет
+  чужим игроком и печатает промокод. Утечка ключа = вся база ПДн.
+  Фикс: подписанный httpOnly-cookie вместо bearer в теле, включить RLS, ключ строго
+  на сервере, не эхоить sessionId в ответах.
+
+- Гонка (TOCTOU) в getOrCreatePlayer (src/lib/players-store.ts:130).
+  Два одновременных первых сабмита одного телефона генерят разные session_id;
+  второй upsert (onConflict: phone) затирает session_id первого. Первому клиенту
+  уже вернули его sessionId → его запросы падают с 404 (SESSION_NOT_FOUND).
+  Фикс: insert … on conflict (phone) do update set first_name=…, city=… (без
+  перезаписи session_id/created_at).
+
+- savePlayer пишет всю строку из устаревшего снапшота → потерянные апдейты
+  (src/lib/players-store.ts:80). Параллельные finish_attempt и claim_discount
+  затирают колонки друг друга (стёртый промокод, откат best_distance).
+  Фикс: точечные UPDATE только своих колонок; монотонные поля считать в SQL
+  (GREATEST(best_distance_km, $x), attempts_left - 1).
+
+
+----------------------------------------------------------------------
+СРЕДНИЙ ПРИОРИТЕТ
+----------------------------------------------------------------------
+
+- Промокоды на Math.random(), 4 символа, без UNIQUE в схеме
+  (src/lib/players-store.ts:105, supabase/schema.sql:12). Коллизии между игроками
+  не детектятся, код предсказуем/перебираем.
+  Фикс: crypto.randomInt, шире алфавит/длина, UNIQUE на promo_code, retry-on-conflict.
+
+- console.error дампит полные объекты ошибок Supabase в логи
+  (src/lib/players-store.ts:87,161,181; src/app/api/lead/route.ts:66;
+  src/app/api/game-update/route.ts:167). В сообщениях об ошибках могут быть
+  телефон/имя. Под 152-ФЗ — проблема. Логировать только message/code, скрабить ПДн.
+
+- Согласие валидируется, но нигде не сохраняется (src/lib/players-store.ts:110,
+  supabase/schema.sql). Нет колонок consent_given/timestamp/policy_version — нет
+  доказательства согласия на хранение ПДн. Honeypot обходится: бот не отправляет
+  поле, а parseLeadBody приводит отсутствующее к "" (src/app/api/lead/route.ts:19).
+  Фикс: сохранять факт/время/версию согласия; honeypot подкрепить rate limiting.
+
+- phone (ПДн) как PRIMARY KEY (supabase/schema.sql:3). Исправление номера =
+  пересоздание строки; ПДн как идентичность усложняет удаление по 152-ФЗ/GDPR.
+  Фикс: суррогатный PK (session_id или отдельный id), phone — unique not null +
+  CHECK (phone ~ '^[0-9]{11}$').
+
+- Схема без CHECK-констрейнтов (supabase/schema.sql:8). attempts_left может стать
+  отрицательным, status/character — свободный текст без enum, нет UNIQUE на
+  промокод. Все инварианты только в JS, гонки их обходят.
+  Фикс: CHECK на attempts_left/used/best_*, CHECK/enum на status и character,
+  UNIQUE на promo_code. БД — последняя линия защиты.
+
+- claimDiscount при двух параллельных вызовах генерит два разных промокода
+  (src/lib/players-store.ts:251). Клиенту показан один, в базе другой.
+  Фикс: set promo_code = coalesce(promo_code, $new) одним атомарным UPDATE.
+
+- Порог победы 5000 захардкожен в сторе (src/lib/players-store.ts:232) вместо
+  DISTANCE_GOAL/DISCOUNT_TIERS.
+
+- Формирование ответа продублировано в трёх местах: lead-роут, game-update-роут,
+  тип в api-client (src/app/api/game-update/route.ts:81, src/app/api/lead/route.ts:43,
+  src/lib/api-client.ts). Вынести в общий маппер.
+
+
+----------------------------------------------------------------------
+НИЗКИЙ ПРИОРИТЕТ
+----------------------------------------------------------------------
+
+- /api/lead делает getPlayerByPhone дважды (в роуте ради isReturning + внутри
+  getOrCreatePlayer) + запись (src/app/api/lead/route.ts:36). Два идентичных
+  SELECT + запись на самый горячий эндпоинт. Фикс: возвращать {player, isReturning}
+  из одного чтения/upsert.
+
+- updated_at поддерживается только в JS (touch), без BEFORE UPDATE триггера
+  (supabase/schema.sql:16, src/lib/players-store.ts:38). Любой прямой/RPC-write
+  оставит его протухшим; нельзя использовать как токен оптимистичной блокировки.
+  Фикс: триггер set new.updated_at = now() на уровне БД.
+
+- DB-ошибки перевыбрасываются как сырой Error(error.message), не PlayerStoreError
+  (src/lib/players-store.ts:88,162,181). Теряется типизация: конфликты (23505) не
+  отличить от 500, нельзя вернуть 409. Клиенту не течёт (только в логи).
+  Фикс: оборачивать в PlayerStoreError со стабильным кодом (маппинг Postgres-кодов).
+
+- Нормализация телефона коерсит произвольный/короткий ввод в 11-значный ключ
+  (src/lib/form-validation.ts:20). isValidPhone проверяет только длину == 11 —
+  фейковые, но длинновалидные номера принимаются, что бьёт по «один номер — один
+  промокод». Фикс: валидировать по реальному паттерну мобильного (7 + 9XXXXXXXXX),
+  отклонять, а не коерсить.
+
+- Неиспользуемый экспортируемый тип PlayersDatabase (src/lib/player.ts:30).
